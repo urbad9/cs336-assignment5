@@ -1,5 +1,6 @@
 from transformers import PreTrainedTokenizerBase
 import torch
+import torch.nn.functional as F
 
 def tokenize_prompt_and_output(
     prompt_strs:list[str],
@@ -79,3 +80,35 @@ def tokenize_prompt_and_output(
         "labels" : labels,
         "response_mask" : response_mask
     }
+
+
+def get_response_log_probs(
+    model: torch.nn.Module,
+    input_ids: torch.Tensor,
+    labels: torch.Tensor,
+    return_token_entropy: bool,
+) -> dict[str, torch.Tensor]:
+    # 1. 模型前向传播
+    output = model(input_ids)
+    # 2. 取出模型输出的 logits [B, seqlen, vocablen]
+    logits = output.logits
+    # 3. 在词表维度计算 log softmax
+    all_log_probs = F.log_softmax(logits, dim = -1)
+    # 4. 根据真实标签取出对应 token 的 log probability [B, seqlen]
+    log_probs = torch.gather(
+        all_log_probs,
+        dim = -1,
+        index = labels.unsqueeze(-1)
+    ).squeeze(-1)
+    # 5. 创建返回字典
+    result = {"log_probs" : log_probs}
+    # 6. 如果要求计算 entropy：
+    #    将 log probability 转换成 probability
+    #    根据熵公式计算每个位置的 entropy
+    #    加入返回字典
+    if return_token_entropy:
+        probs = F.softmax(logits, dim = -1)
+        token_entropy = -torch.sum(probs * all_log_probs, dim = -1)
+        result["token_entropy"] = token_entropy
+    # 7. 返回结果
+    return result
